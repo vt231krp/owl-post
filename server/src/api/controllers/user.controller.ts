@@ -6,6 +6,7 @@ import { UserService } from "../../core/services/user.service";
 import { IUser } from "../../core/models/user.model";
 import { HydratedDocument } from "mongoose";
 import { TokenService } from "../services/token.service";
+import { ParsedUrlQuery } from "node:querystring";
 
 export class UserController {
   static async authUser(req: Request, res: Response, next: NextFunction) {
@@ -22,35 +23,25 @@ export class UserController {
       }
 
       const vals = querystring.parse(initData);
-      const dataCheckString = Object.keys(vals)
-        .filter((key) => key !== "hash")
-        .sort()
-        .map((key) => `${key}=${decodeURIComponent(vals[key] as any)}`)
-        .join("\n");
 
-      const secretKey = crypto
-        .createHmac("sha256", "WebAppData")
-        .update(BOT_TOKEN)
-        .digest();
+      try {
+        if (!this.validateHmac(vals, BOT_TOKEN)) {
+          return next(ApiError.Unauthorized("Invalid HMAC hash"));
+        }
 
-      const hmac = crypto
-        .createHmac("sha256", secretKey)
-        .update(dataCheckString)
-        .digest("hex");
+        if (!("user" in vals)) {
+          return next(ApiError.Unauthorized("User not found in initData"));
+        }
 
-      if (hmac == vals.hash) {
-        if (!("user" in vals)) throw new Error("User not exist in initData");
-        const userInitData = JSON.parse(vals.user as string);
-
+        const userInitData = this.parseUserData(vals);
         const user = await UserService.authUser({
           tgId: userInitData.id,
         } as HydratedDocument<IUser>);
 
         const token = await TokenService.generateToken(user);
-
         res.status(200).json({ user, token });
-      } else {
-        throw ApiError.Unauthorized("initData not found");
+      } catch (err) {
+        next(err);
       }
     } catch (err) {
       next(err);
@@ -60,10 +51,33 @@ export class UserController {
   static async getAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
       const response = await UserService.getAllUsers();
-
       res.status(200).json(response);
     } catch (err) {
       next(err);
     }
+  }
+
+  private static validateHmac(vals: ParsedUrlQuery, botToken: string) {
+    const dataCheckString = Object.keys(vals)
+      .filter((key) => key !== "hash")
+      .sort()
+      .map((key) => `${key}=${decodeURIComponent(vals[key] as any)}`)
+      .join("\n");
+
+    const secretKey = crypto
+      .createHmac("sha256", "WebAppData")
+      .update(botToken)
+      .digest();
+
+    const hmac = crypto
+      .createHmac("sha256", secretKey)
+      .update(dataCheckString)
+      .digest("hex");
+
+    return hmac == vals.hash;
+  }
+
+  private static parseUserData(vals: ParsedUrlQuery) {
+    return JSON.parse(vals.user as string);
   }
 }
