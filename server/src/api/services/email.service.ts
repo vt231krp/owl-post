@@ -6,18 +6,17 @@ import { HydratedDocument } from "mongoose";
 import { Domain, Message } from "../types";
 import { AxiosResponse } from "axios";
 
+const EMAIL_LIMIT = 25;
+
 export class EmailService {
   static async createEmail(name: string, domain: string, userId: string) {
-    const existUser = await UserService.getUser(userId);
-    if (!existUser) {
-      throw ApiError.NotFound("User not found");
-    }
+    const existUser = await this.getUserOrThrow(userId);
 
     const userEmailsLength = (await this.getEmails(existUser._id.toString()))
       .length;
-    if (userEmailsLength == 25) {
+    if (userEmailsLength == EMAIL_LIMIT) {
       throw ApiError.BadRequest(
-        "The limit is 25 mailboxes. To add more, delete unnecessary ones",
+        `The limit is ${EMAIL_LIMIT} mailboxes. To add more, delete unnecessary ones`,
       );
     }
 
@@ -53,21 +52,7 @@ export class EmailService {
       const statusCode = err.response.data.code;
 
       if (statusCode == 101) {
-        const existEmail = await Email.findOne({ email }).exec();
-        if (!existEmail) throw ApiError.NotFound("Email not found");
-
-        const [name, domain] = existEmail.email.split("@");
-
-        await API.post<
-          Omit<IEmail, "user">,
-          AxiosResponse<Omit<IEmail, "user">>
-        >(`/email/new`, {
-          name,
-          domain,
-          token: existEmail.token,
-        });
-
-        return this.getMessages(email);
+        await this.initExistEmail(email);
       }
 
       throw new Error("Something went wrong");
@@ -83,10 +68,7 @@ export class EmailService {
   }
 
   static async deleteEmail(email: string, userId: string) {
-    const existUser = await UserService.getUser(userId);
-    if (!existUser) {
-      throw ApiError.NotFound("User not found");
-    }
+    const existUser = await this.getUserOrThrow(userId);
 
     const existEmail = (await Email.findOne({
       email,
@@ -118,5 +100,31 @@ export class EmailService {
       `/message/${id}`,
     );
     return res.data;
+  }
+
+  private static async getUserOrThrow(userId: string) {
+    const user = await UserService.getUser(userId);
+    if (!user) {
+      throw ApiError.NotFound("User not found");
+    }
+    return user;
+  }
+
+  private static async initExistEmail(email: string) {
+    const existEmail = await Email.findOne({ email }).exec();
+    if (!existEmail) throw ApiError.NotFound("Email not found");
+
+    const [name, domain] = existEmail.email.split("@");
+
+    await API.post<Omit<IEmail, "user">, AxiosResponse<Omit<IEmail, "user">>>(
+      `/email/new`,
+      {
+        name,
+        domain,
+        token: existEmail.token,
+      },
+    );
+
+    return this.getMessages(email);
   }
 }
